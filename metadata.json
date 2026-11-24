@@ -1,0 +1,6 @@
+{
+  "name": "Typhoon ASR Studio",
+  "description": "Real-time Thai and Isan speech recognition tester powered by Typhoon ASR API and Express.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
