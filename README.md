@@ -1,118 +1,118 @@
 # Typhoon ASR Studio
 
-เว็บแอปพลิเคชันแบบหน้าเดียว (Single-Page Web App) สำหรับทดลองใช้งาน **OpenTyphoon Speech Recognition API** โดยรองรับการสลับโมเดลภาษาไทยกลางและภาษาอีสาน พูดผ่านไมโครโฟนแล้วถอดความออกมาเป็นข้อความแบบต่อเนื่องทันที
+A clean, single-page web application for testing the **OpenTyphoon Speech Recognition API**. Switch between standard Thai and Isan ASR models, speak into your microphone, and see transcribed text appear continuously in real time.
 
 ---
 
-## 1. แนวคิดและสถาปัตยกรรม (Concept & Architecture)
+## 1. Concept & Architecture
 
-OpenTyphoon ASR (`https://api.opentyphoon.ai/v1/audio/transcriptions`) ให้บริการผ่าน REST endpoint แบบ OpenAI-compatible ที่รับไฟล์เสียง (`.wav`, `.mp3`, `.flac`, `.ogg`, `.opus`) จึงออกแบบระบบให้ทำงานแบบ **Near-Realtime Streaming** บนเบราว์เซอร์ได้ทันทีโดยไม่ต้องตั้งค่า WebSocket Server แยก:
+The hosted OpenTyphoon ASR endpoint (`https://api.opentyphoon.ai/v1/audio/transcriptions`) exposes an OpenAI-compatible REST interface that accepts audio files (`.wav`, `.mp3`, `.flac`, `.ogg`, `.opus`). To deliver a **near-realtime speaking experience** without requiring a separate WebSocket server, the app uses a lightweight client-to-proxy pipeline:
 
 1. **Client-Side Audio Capture & VAD Chunking**
-   - รับเสียงจากไมโครโฟนผ่าน `AudioContext` และทำ Downsampling ให้เป็น **16 kHz Mono PCM**
-   - เก็บ Pre-roll buffer (~300 ms) เพื่อไม่ให้พยางค์แรกขาดหาย
-   - ใช้ Voice Activity Detection (VAD) ตรวจจับระดับเสียง (RMS): เมื่อผู้พูดหยุดพักสั้นๆ (~700 ms) หรือพูดต่อเนื่องครบ ~5.5 วินาที ระบบจะเข้ารหัสเสียงช่วงนั้นเป็นไฟล์ `.wav` ขนาดเล็กในหน่วยความจำ แล้วส่งไปถอดความทันที
-   - ใช้คิวแบบเรียงลำดับ (Serialized Upload Queue) เพื่อให้ข้อความแสดงผลตามลำดับวลีที่พูดอย่างถูกต้อง
+   - Captures microphone input via the Web Audio API (`AudioContext`) and downsamples it to **16 kHz Mono PCM**.
+   - Maintains a short pre-roll buffer (~300 ms) so opening consonants and syllables are not clipped.
+   - Applies Voice Activity Detection (VAD) using RMS energy thresholds: when a speaker pauses briefly (~700 ms) or speaks continuously for ~5.5 seconds, the buffered speech is encoded in memory as a compact `.wav` file and dispatched immediately.
+   - Uses a serialized upload queue so transcribed phrases always append in spoken order.
 
 2. **Server-Side API Proxy (Security Boundary)**
-   - เบราว์เซอร์ไม่เรียก OpenTyphoon API โดยตรง แต่ส่งไฟล์เสียงผ่าน Express endpoint `/api/transcribe`
-   - ค่า `TYPHOON_API_KEY` ถูกเก็บและใช้งานเฉพาะฝั่งเซิร์ฟเวอร์ (`process.env.TYPHOON_API_KEY`) เท่านั้น เพื่อไม่ให้ Secret รั่วไหลไปยัง Client
-   - ฝั่งเซิร์ฟเวอร์ตรวจสอบชื่อโมเดล (Allowlist), นามสกุล/MIME ของไฟล์เสียง, จำกัดขนาดไฟล์ไม่เกิน 10 MB และกำหนด Timeout ที่ 30 วินาที
+   - The browser never calls OpenTyphoon directly; instead, it posts audio to the Express route `/api/transcribe`.
+   - `TYPHOON_API_KEY` is read exclusively from server-side `process.env` and never exposed to client code.
+   - The server validates the selected model against an explicit allowlist, checks file extensions/MIME types, enforces a 10 MB upload limit, and applies a 30-second upstream request timeout.
 
-3. **รองรับทั้ง Local Dev และ Vercel Production ด้วย Express ชุดเดียว**
-   - โค้ด Express หลักอยู่ใน `server/asrApp.ts`
-   - ตอนพัฒนาในเครื่อง `server.ts` จะนำ Express app มาต่อกับ `vite.middlewares` บนพอร์ต `3000`
-   - ตอน Deploy บน Vercel `api/index.ts` จะ import Express app เดียวกันไปรันเป็น Serverless Function และให้ Vercel เสิร์ฟไฟล์ Frontend จาก `dist/`
+3. **Shared Express Core for Local Dev & Vercel Production**
+   - The Express application is defined once in `server/asrApp.ts`.
+   - During local development, `server.ts` mounts `vite.middlewares` alongside the Express API on port `3000`.
+   - On Vercel, `api/index.ts` exports the same Express app as a Serverless Function while Vercel serves the static Vite bundle from `dist/`.
 
 ---
 
-## 2. Framework และเทคโนโลยีที่ใช้ (Tech Stack)
+## 2. Framework & Tech Stack
 
-| ส่วนประกอบ | เทคโนโลยี | หน้าที่หลัก |
+| Layer | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Frontend** | React 19, TypeScript, Vite 8 | Single-page UI, จัดการสถานะการอัดเสียง และแสดงผลข้อความ |
-| **Styling & Icons** | Tailwind CSS v4, Lucide React | จัดวางเลย์เอาต์ที่อ่านง่าย รองรับภาษาไทย (`IBM Plex Sans Thai`) |
-| **Audio Processing** | Web Audio API (`AudioContext`, `AnalyserNode`) | จับเสียงไมโครโฟน, วาดกราฟคลื่นเสียง, Downsample 16 kHz และสร้างไฟล์ WAV |
-| **Backend** | Express 4, Multer, Node.js Fetch / FormData | รับไฟล์เสียงแบบ `multipart/form-data` และส่งต่อไปยัง OpenTyphoon API |
-| **Deployment** | Vercel (`vercel.json` + Serverless Function) | รัน Frontend แบบ Static และ Backend Express ผ่าน `/api/*` |
+| **Frontend** | React 19, TypeScript, Vite 8 | Single-page UI, recording controls, and live transcript feed |
+| **Styling & Icons** | Tailwind CSS v4, Lucide React | Clean, responsive layout and typography (`Plus Jakarta Sans`, `IBM Plex Sans Thai`, `IBM Plex Mono`) |
+| **Audio Processing** | Web Audio API (`AudioContext`, `AnalyserNode`) | Live waveform meter, 16 kHz resampling, VAD segmentation, and 16-bit PCM WAV encoding |
+| **Backend** | Express 4, Multer, Node.js `fetch` / `FormData` | Multipart audio upload handling and OpenTyphoon API proxy |
+| **Deployment** | Vercel (`vercel.json` + Serverless Function) | Static frontend hosting (`dist/`) and `/api/*` serverless routing |
 
-### โมเดลที่รองรับ
-- `typhoon-asr-realtime` — สำหรับภาษาไทยมาตรฐาน
-- `typhoon-isan-asr-realtime` — สำหรับภาษาอีสาน / ไทยตะวันออกเฉียงเหนือ
+### Supported Models
+- `typhoon-asr-realtime` — Standard Thai speech recognition
+- `typhoon-isan-asr-realtime` — Isan / Northeastern Thai dialect speech recognition
 
 ---
 
-## 3. โครงสร้างโค้ด (Code Structure)
+## 3. Code Structure
 
 ```text
 .
 ├── api/
-│   └── index.ts             # Entry point สำหรับ Vercel Serverless Function (export Express app)
+│   └── index.ts             # Vercel Serverless Function entry point (exports Express app)
 ├── server/
-│   └── asrApp.ts            # Express app หลัก: /api/health และ /api/transcribe + validation
-├── server.ts                # Entry point สำหรับรันในเครื่อง (Express + Vite middleware ใน dev / dist ใน prod)
+│   └── asrApp.ts            # Shared Express app: /api/health, /api/transcribe, input validation
+├── server.ts                # Local & Node server entry point (Express + Vite dev middleware / dist static)
 ├── src/
 │   ├── lib/
-│   │   └── audioWav.ts      # คำนวณ RMS, Downsample เป็น 16 kHz และเข้ารหัส PCM WAV 16-bit
-│   ├── App.tsx              # UI หน้าเดียว: เลือกโมเดล, ปุ่มพูด, กราฟเสียง, อัปโหลดไฟล์, แสดงผลข้อความ
-│   ├── index.css            # Tailwind CSS import และฟอนต์หลัก
-│   └── main.tsx             # React root mount
-├── .env.example             # ตัวอย่างตัวแปรสภาพแวดล้อมที่ต้องตั้งค่า
-├── index.html               # HTML template และ Google Fonts (Plus Jakarta Sans, IBM Plex Sans Thai, IBM Plex Mono)
-├── package.json             # Dependencies และ scripts (dev, build, start, lint)
-└── vercel.json              # ตั้งค่า build output (dist) และ routing /api/* ไปยัง api/index
+│   │   └── audioWav.ts      # RMS energy calculation, 16 kHz linear resampler, PCM WAV encoder
+│   ├── App.tsx              # Single-page UI: model switcher, mic capture, waveform, file upload, transcript
+│   ├── index.css            # Tailwind CSS import and typography defaults
+│   └── main.tsx             # React application mount
+├── .env.example             # Example environment variables template
+├── index.html               # HTML shell and Google Fonts imports
+├── package.json             # Dependencies and npm scripts (dev, build, start, lint)
+└── vercel.json              # Vercel build config (dist/) and /api/* rewrite rules
 ```
 
 ---
 
-## 4. การรันบนเครื่องเพื่อพัฒนา (Local Development)
+## 4. Local Development
 
-### 1) ติดตั้ง Dependencies
+### 1) Install Dependencies
 ```bash
 npm install
 ```
 
-### 2) ตั้งค่า Environment Variables
-คัดลอกไฟล์ `.env.example` เป็น `.env` แล้วใส่คีย์ OpenTyphoon API ของคุณ (ไฟล์ `.env` ถูกกันไว้ใน `.gitignore` แล้ว):
+### 2) Configure Environment Variables
+Copy `.env.example` to `.env` and add your OpenTyphoon API key (`.env` is excluded by `.gitignore`):
 
 ```env
 TYPHOON_API_KEY="YOUR_TYPHOON_API_KEY"
 ```
 
-### 3) รันเซิร์ฟเวอร์พัฒนา
+### 3) Start the Development Server
 ```bash
 npm run dev
 ```
-เปิดเบราว์เซอร์ไปที่ `http://localhost:3000`
+Open `http://localhost:3000` in your browser.
 
-### คำสั่งอื่นๆ
-- `npm run lint` — ตรวจสอบ TypeScript types (`tsc --noEmit`)
-- `npm run build` — Build ฝั่ง Frontend ลงโฟลเดอร์ `dist/`
-- `npm start` — รัน Production server ผ่าน `node server.ts`
+### Additional Scripts
+- `npm run lint` — Run TypeScript type checking (`tsc --noEmit`)
+- `npm run build` — Build the production frontend into `dist/`
+- `npm start` — Run the production Express server via `node server.ts`
 
 ---
 
-## 5. การ Deploy ขึ้น Vercel
+## 5. Deploying to Vercel
 
-โปรเจกต์นี้ตั้งค่าไฟล์ `vercel.json` และ `api/index.ts` ให้พร้อม Deploy บน Vercel ได้ทันที
+The repository includes `vercel.json` and `api/index.ts` for zero-config Express + Vite deployment on Vercel.
 
-### ขั้นตอนการ Deploy
+### Deployment Steps
 
-1. **เชื่อมต่อ Repository กับ Vercel** (ผ่าน Vercel Dashboard หรือ Vercel CLI)
-2. **ตั้งค่า Build & Output** (ระบบจะอ่านจาก `vercel.json` ให้อัตโนมัติ):
+1. **Connect your repository to Vercel** (via the Vercel Dashboard or Vercel CLI).
+2. **Verify Build & Output Settings** (automatically detected from `vercel.json`):
    - **Build Command:** `npm run build`
    - **Output Directory:** `dist`
-3. **เพิ่ม Environment Variable ใน Vercel Dashboard**:
-   - ไปที่ **Project Settings → Environment Variables**
-   - เพิ่มตัวแปรชื่อ `TYPHOON_API_KEY` พร้อมค่า API Key ของคุณ (เลือกใช้ใน Production / Preview / Development ตามต้องการ)
+3. **Configure Environment Variables in Vercel**:
+   - Navigate to **Project Settings → Environment Variables**.
+   - Add `TYPHOON_API_KEY` with your OpenTyphoon API key for Production (and Preview/Development if needed).
 4. **Deploy**:
-   - กด Deploy บน Dashboard หรือรันผ่าน CLI:
+   - Trigger a deployment from the Vercel Dashboard, or run:
      ```bash
      vercel --prod
      ```
 
-### การทำงานของ Routing บน Vercel
-- คำขอที่ขึ้นต้นด้วย `/api/*` (เช่น `GET /api/health`, `POST /api/transcribe`) จะถูกส่งไปยัง Serverless Function ที่ `api/index.ts`
-- คำขอเส้นทางอื่นๆ จะถูกเสิร์ฟจากไฟล์ Static ที่ Build ไว้ใน `dist/index.html`
+### Routing Behavior on Vercel
+- Requests matching `/api/*` (such as `GET /api/health` and `POST /api/transcribe`) are routed to the Express Serverless Function at `api/index.ts`.
+- All other routes serve the built SPA bundle from `dist/index.html`.
 
-> **หมายเหตุเรื่องขนาดไฟล์บน Vercel:** Vercel Serverless Functions มีขีดจำกัดขนาด Request Body สูงสุดประมาณ 4.5 MB สำหรับ Hobby/Pro plan โดยปกติการพูดทีละวลีผ่านไมโครโฟน (16 kHz mono WAV ความยาวไม่เกิน 5.5 วินาที) จะมีขนาดเพียง ~170 KB จึงส่งผ่านได้รวดเร็วและไม่ติดขีดจำกัดครับ
+> **Note on Vercel Payload Limits:** Vercel Serverless Functions enforce a ~4.5 MB request body limit on standard plans. Typical spoken phrases captured from the microphone (16 kHz mono WAV up to 5.5 seconds) are ~170 KB, keeping uploads fast and well within limits.
